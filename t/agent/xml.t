@@ -14,6 +14,8 @@ use File::Temp qw(tempdir);
 use UNIVERSAL::require;
 use Encode qw(decode);
 
+use XML::LibXML;
+
 use GLPI::Agent::XML;
 use GLPI::Agent::Tools;
 
