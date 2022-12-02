@@ -14,8 +14,6 @@ use File::Temp qw(tempdir);
 use UNIVERSAL::require;
 use Encode qw(decode);
 
-use XML::LibXML;
-
 use GLPI::Agent::XML;
 use GLPI::Agent::Tools;
 
@@ -56,10 +54,13 @@ my %xmls = (
         dump    => { rOOt => '' }
     },
     root2 => {
-        options => { no_xml_decl => 1, xml_format => 0 },
+        options => {
+            no_xml_decl => 1,
+            xml_format => 0,
+            tag_compression => 1 # To set XML::LibXML::Parser serializer option
+        },
         content => qq{<rOOt></rOOt>},
         dump    => { rOOt => '' },
-        tag_compression => 1 # To set XML::LibXML::Parser serializer option
     },
     root3 => {
         options => { xml_format => 0 },
@@ -69,12 +70,14 @@ my %xmls = (
         dump    => { rOOt => '' }
     },
     root4 => {
-        options => { format => 0 },
+        options => {
+            format => 0,
+            tag_compression => 1 # To set XML::LibXML::Parser serializer option
+        },
         content => qq{<?xml version="1.0" encoding="UTF-8"?>
 <rOOt></rOOt>
 },
         dump    => { rOOt => '' },
-        tag_compression => 1 # To set XML::LibXML::Parser serializer option
     },
     basic => {
         content => qq{<?xml version="1.0" encoding="UTF-8"?>
@@ -391,7 +394,6 @@ foreach my $test (sort keys %xmls) {
         "<$test> expected hash after update"
     );
 
-    local $XML::LibXML::setTagCompression = $xmls{$test}->{tag_compression} // 0;
     is(
         $xml->empty->write($dump),
         $xmls{$test}->{has_xml} // 1 ? $xmls{$test}->{write} // $xmls{$test}->{content} : '',
