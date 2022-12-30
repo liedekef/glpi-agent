@@ -107,6 +107,7 @@ toolbox:
 * Fix Inventory page not displayed when netdiscovery or netinventory tasks are not installed
 * Default configuration now authorize to update toolbox interface from the UI
 * Support remotes management and remoteinventory task start
+* fix #254: Add credential to iprange not working after adding first one
 * Bump ToolBox plugin version to 1.1
 
 basic-authentication-server-plugin:
