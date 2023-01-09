@@ -16,6 +16,7 @@ Requires: perl(Net::SSLeay)
 Requires: perl(Proc::Daemon)
 Requires: perl(Socket::GetAddrInfo)
 Requires: perl(DateTime)
+Requires: perl(Parallel::ForkManager)
 #Recommended for inventory module
 Recommends: perl(Net::CUPS)
 Recommends: perl(Parse::EDID)
@@ -243,6 +244,7 @@ install -m 644 -D  contrib/unix/%{name}.service %{buildroot}%{_unitdir}/%{name}.
 %{_datadir}/%{name}/lib/GLPI/Agent/Config.pm
 %{_datadir}/%{name}/lib/setup.pm
 %{_datadir}/%{name}/lib/GLPI/Agent/Daemon.pm
+%{_datadir}/%{name}/lib/GLPI/Agent/Event*
 %{_datadir}/%{name}/lib/GLPI/Agent/HTTP/Server.pm
 %{_datadir}/%{name}/lib/GLPI/Agent/HTTP/Client*
 %{_datadir}/%{name}/lib/GLPI/Agent/HTTP/Protocol
@@ -341,6 +343,10 @@ fi
 
 
 %changelog
+* Mon Jan 9 2023 Guillaume Bougard <gbougard AT teclib DOT com>
+- Set Parallel::ForkManager dependency
+- Don't miss to include new GLPI::Agent::Event module
+
 * Wed Mar 16 2022 Guillaume Bougard <gbougard AT teclib DOT com>
 - Set Net::SSH2 dependency as weak dependency
 - Add Net::CUPS & Parse::EDID as weak dependency
