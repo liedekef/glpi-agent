@@ -85,6 +85,7 @@ netdiscovery/netinventory:
   of few Fortinet devices.
 * Add support for Zyxel devices
 * fix #337: Add TP-Link linux appliance support
+* fix #331: Update Juniper LLDP support
 
 deploy:
 * Fix possible failure when mirror is set but misses file parts

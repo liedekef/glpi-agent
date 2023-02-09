@@ -1026,11 +1026,23 @@ sub _getKnownMacAddressesDeprecatedOids {
     return $results;
 }
 
+sub _sortStackStatusSuffix {
+    my ($a, $b) = @_;
+    my @a = split('\.', $a);
+    my @b = split('\.', $b);
+    return $a[0] <=> $b[0] || $a[1] <=> $b[1];
+}
+
 sub _setConnectedDevices {
     my (%params) = @_;
 
     my $logger = $params{logger};
     my $ports  = $params{ports};
+    my $snmp   = $params{snmp};
+
+    # Defined IF-MIB
+    my $ifStackStatus = $snmp->walk('.1.3.6.1.2.1.31.1.2.1.3');
+    my $ifStackStatusKeys = $ifStackStatus ? [ sort { _sortStackStatusSuffix($a, $b) } keys(%{$ifStackStatus}) ] : [];
 
     my $lldp_info = _getLLDPInfo(%params);
     if ($lldp_info) {
@@ -1046,10 +1058,69 @@ sub _setConnectedDevices {
             my $port            = $ports->{$interface_id};
             my $lldp_connection = $lldp_info->{$interface_id};
 
-            $port->{CONNECTIONS} = {
-                CDP        => 1,
-                CONNECTION => $lldp_connection
-            };
+            # More than one connection can have been detected if connections are found
+            # In that case, we will try to detect if the port is virtual and find the
+            # expected physical port
+            my @connections = ref($lldp_connection) eq 'ARRAY' ? @{$lldp_connection} : ($lldp_connection);
+            my $original_port = $port;
+            my $original_interfaceid = $interface_id;
+            my @linked = grep { $_ =~ /^$interface_id\.\d+$/ } @{$ifStackStatusKeys};
+            foreach my $connection (@connections) {
+                # Check ifStackStatus if the port is associated to a virtual port
+                ($port, $interface_id) = ($original_port, $original_interfaceid);
+                if ($ifStackStatus) {
+                    # max_depth is just a security in the case ports are broken and woukd involve an infinite loop here
+                    my $max_depth = 32;
+                    while ($port->{IFTYPE} && $port->{IFTYPE} !~ /^6|7|56|62|71|117|169$/) {
+                        unshift @linked, grep { $_ =~ /^$interface_id\.\d+$/ } @{$ifStackStatusKeys}
+                            unless $interface_id eq $original_interfaceid;
+                        my $link;
+                        while (@linked) {
+                            $link = shift @linked;
+                            # Next if not an active interface
+                            next if !$link || $ifStackStatus->{$link} !~ /^(active\()?1\)?$/;
+                            my ($thisportid, $linkedportid) = $link =~ /^(\d+)\.(\d+)$/;
+                            # Validate when we reached the final physical port $linkedportid == 0
+                            if ($linkedportid && exists($ports->{$linkedportid})) {
+                                $port = $ports->{$linkedportid};
+                                $interface_id = $linkedportid;
+                                last;
+                            } elsif ($linkedportid) {
+                                $logger->debug(
+                                    "LLDP support: failed to link interface $original_interfaceid from $thisportid to a physical port with unknown portid $linkedportid"
+                                ) if $logger;
+                                $port = $original_port;
+                            } else {
+                                # We reached the final port, but we should not overide a connection if still set previously
+                                # This can be the case with Juniper virtual aggregate
+                                if ($port->{CONNECTIONS}) {
+                                    if (!@linked) {
+                                        $logger->debug(
+                                            "LLDP support: failed to link interface $original_interfaceid to a physical port with no more linked portid"
+                                        ) if $logger;
+                                    }
+                                }
+                            }
+                        }
+                        # Security to avoid infinite loop on broken ports table
+                        last if $port == $original_port || ! --$max_depth;
+                    }
+                    # Always reset port to original if we are leaving with no port found
+                    $port = $original_port unless $max_depth;
+                }
+                $port->{CONNECTIONS} = {
+                    CDP        => 1,
+                    CONNECTION => $connection
+                };
+            }
+
+            # Anyway also keep first connection in original port
+            unless ($port == $original_port) {
+                $original_port->{CONNECTIONS} = {
+                    CDP        => 1,
+                    CONNECTION => $connections[0]
+                };
+            }
         }
     }
 
@@ -1144,6 +1215,17 @@ sub _setConnectedDevices {
     }
 }
 
+sub _sortChassisIdSuffix {
+    my ($a, $b) = @_;
+    my @a = split('\.', $a);
+    my @b = split('\.', $b);
+    return (
+            defined($a[2]) && defined($b[2]) && $a[2] <=> $b[2]
+        ) || (
+            defined($a[1]) && defined($b[1]) && $a[1] <=> $b[1]
+        ) || $a[0] <=> $b[0];
+}
+
 sub _getLLDPInfo {
     my (%params) = @_;
 
@@ -1153,6 +1235,7 @@ sub _getLLDPInfo {
     my $results;
     my $ChassisIdSubType = $snmp->walk('.1.0.8802.1.1.2.1.4.1.1.4');
     my $lldpRemChassisId = $snmp->walk('.1.0.8802.1.1.2.1.4.1.1.5');
+    my $lldpRemPortIdSubtype = $snmp->walk('.1.0.8802.1.1.2.1.4.1.1.6');
     my $lldpRemPortId    = $snmp->walk('.1.0.8802.1.1.2.1.4.1.1.7');
     my $lldpRemPortDesc  = $snmp->walk('.1.0.8802.1.1.2.1.4.1.1.8');
     my $lldpRemSysName   = $snmp->walk('.1.0.8802.1.1.2.1.4.1.1.9');
@@ -1178,7 +1261,8 @@ sub _getLLDPInfo {
         '7' => "local"
     );
 
-    while (my ($suffix, $mac) = each %{$lldpRemChassisId}) {
+    foreach my $suffix (sort { _sortChassisIdSuffix($a, $b) } keys(%{$lldpRemChassisId})) {
+        my $mac = $lldpRemChassisId->{$suffix};
         my $sysdescr = getCanonicalString($lldpRemSysDesc->{$suffix});
         my $sysname = getCanonicalString($lldpRemSysName->{$suffix});
         next unless ($sysdescr || $sysname);
@@ -1212,21 +1296,40 @@ sub _getLLDPInfo {
         $connection->{SYSDESCR} = $sysdescr if $sysdescr;
         $connection->{SYSNAME} = $sysname if $sysname;
 
-        # portId is either a port number or a port mac address,
-        # duplicating chassisId
+        # portId is either a port number or a port mac address, duplicating chassisId
+        my $PortIdSubtype = "";
+        $PortIdSubtype = getCanonicalString($lldpRemPortIdSubtype->{suffix}) || ""
+            if $lldpRemPortIdSubtype && $lldpRemPortIdSubtype->{suffix};
         my $portId = $lldpRemPortId->{$suffix};
-        if ($portId !~ /^0x/ or length($portId) != 14) {
+        # As before we need to guess portId type if not set
+        if (!$PortIdSubtype) {
+            if ($portId =~ /^0x[0-9a-f]{12}$/i) {
+                my $thismac = lc(alt2canonical($portId));
+                push @{$connection->{MAC}}, $thismac unless $thismac eq $connection->{SYSMAC};
+            } else {
+                $portId = getCanonicalString($portId);
+                if ($portId =~ /^\d+$/) {
+                    $connection->{IFNUMBER} = $portId;
+                } else {
+                    my $maybe_mac = lc(alt2canonical($portId));
+                    if ($maybe_mac) {
+                        push @{$connection->{MAC}}, $maybe_mac unless $maybe_mac eq $connection->{SYSMAC};
+                    } else {
+                        $connection->{IFDESCR} = $portId;
+                    }
+                }
+            }
+        } elsif ($PortIdSubtype eq '3') { # Mac address
+            push @{$connection->{MAC}}, lc(alt2canonical($portId));
+        } elsif ($PortIdSubtype eq '7') { # "local" should be the remote IFNUMBER
             $portId = getCanonicalString($portId);
             if ($portId =~ /^\d+$/) {
                 $connection->{IFNUMBER} = $portId;
             } else {
-                my $maybe_mac = lc(alt2canonical($portId));
-                if ($maybe_mac) {
-                    push @{$connection->{MAC}}, $maybe_mac;
-                } else {
-                    $connection->{IFDESCR} = $portId;
-                }
+                $connection->{IFDESCR} = $portId;
             }
+        } else {
+            $logger->debug("LLDP support: skipping portId $portId ($PortIdSubtype)");
         }
 
         my $ifdescr = getCanonicalString($lldpRemPortDesc->{$suffix});
@@ -1245,7 +1348,13 @@ sub _getLLDPInfo {
             $params{vendor} eq 'Juniper'    ? $id                   :
                                               $port2interface->{$id};
 
-        $results->{$interface_id} = $connection;
+        if (ref($results->{$interface_id}) eq 'ARRAY') {
+            push @{$results->{$interface_id}}, $connection;
+        } elsif ($results->{$interface_id}) {
+            $results->{$interface_id} = [$results->{$interface_id}, $connection];
+        } else {
+            $results->{$interface_id} = $connection;
+        }
     }
 
     return $results;
